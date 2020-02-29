@@ -1,13 +1,15 @@
 from __future__ import (absolute_import, print_function)
 
-from sympy import log, exp, Symbol, Pow, sin
+from sympy import log, exp, Symbol, Pow, sin, MatrixSymbol
+from sympy.assumptions import assuming, Q
 from sympy.printing.ccode import ccode
+from sympy.codegen.matrix_nodes import MatrixSolve
 from sympy.codegen.cfunctions import log2, exp2, expm1, log1p
 from sympy.codegen.rewriting import (
     optimize, log2_opt, exp2_opt, expm1_opt, log1p_opt, optims_c99,
-    create_expand_pow_optimization
+    create_expand_pow_optimization, matinv_opt
 )
-from sympy.utilities.pytest import XFAIL
+from sympy.testing.pytest import XFAIL
 
 
 def test_log2_opt():
@@ -172,3 +174,13 @@ def test_create_expand_pow_optimization():
     assert cc(x**4 - x**2) == '-x*x + x*x*x*x'
     i = Symbol('i', integer=True)
     assert cc(x**i - x**2) == 'pow(x, i) - x*x'
+
+
+def test_matsolve():
+    n = Symbol('n', integer=True)
+    A = MatrixSymbol('A', n, n)
+    x = MatrixSymbol('x', n, 1)
+
+    with assuming(Q.fullrank(A)):
+        assert optimize(A**(-1) * x, [matinv_opt]) == MatrixSolve(A, x)
+        assert optimize(A**(-1) * x + x, [matinv_opt]) == MatrixSolve(A, x) + x

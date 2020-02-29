@@ -1,7 +1,6 @@
 from sympy.core.numbers import Integer, Rational
-from sympy.core.compatibility import as_int
-from sympy.utilities.misc import filldedent
-
+from sympy.core.singleton import S
+from sympy.core.sympify import _sympify
 
 
 def continued_fraction(a):
@@ -20,13 +19,6 @@ def continued_fraction(a):
     ========
     continued_fraction_periodic, continued_fraction_reduce, continued_fraction_convergents
     """
-    from sympy.core.singleton import S
-    from sympy.core.symbol import Dummy
-    from sympy.core.sympify import _sympify
-    from sympy.core.power import Pow
-    from sympy.polys.polytools import primitive
-    from sympy.polys.polyerrors import ComputationFailed
-
     e = _sympify(a)
     if all(i.is_Rational for i in e.atoms()):
         if e.is_Integer:
@@ -135,7 +127,6 @@ def continued_fraction_periodic(p, q, d=0, s=1):
     """
     from sympy.core.compatibility import as_int
     from sympy.functions import sqrt, floor
-    from sympy.ntheory.primetest import is_square
 
     p, q, d, s = list(map(as_int, [p, q, d, s]))
 

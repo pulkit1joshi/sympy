@@ -1,12 +1,10 @@
 from __future__ import print_function, division
-import functools
+import functools, itertools
 from sympy.core.sympify import sympify
 from sympy.core.expr import Expr
 from sympy.core import Basic
-from sympy.core.compatibility import Iterable
-from sympy.tensor.array import MutableDenseNDimArray, ImmutableDenseNDimArray
+from sympy.tensor.array import ImmutableDenseNDimArray
 from sympy import Symbol
-from sympy.core.sympify import sympify
 from sympy.core.numbers import Integer
 
 
@@ -160,9 +158,9 @@ class ArrayComprehension(Basic):
         return self._shape
 
     @property
-    def is_numeric(self):
+    def is_shape_numeric(self):
         """
-        Test if the array is numeric which means there is no symbolic
+        Test if the array is shape-numeric which means there is no symbolic
         dimension
 
         Examples
@@ -172,10 +170,10 @@ class ArrayComprehension(Basic):
         >>> from sympy import symbols
         >>> i, j, k = symbols('i j k')
         >>> a = ArrayComprehension(10*i + j, (i, 1, 4), (j, 1, 3))
-        >>> a.is_numeric
+        >>> a.is_shape_numeric
         True
         >>> b = ArrayComprehension(10*i + j, (i, 1, 4), (j, 1, k+3))
-        >>> b.is_numeric
+        >>> b.is_shape_numeric
         False
         """
         for _, inf, sup in self._limits:
@@ -250,26 +248,139 @@ class ArrayComprehension(Basic):
         return loop_size
 
     def doit(self):
-        if not self.is_numeric:
+        if not self.is_shape_numeric:
             return self
+
         return self._expand_array()
 
     def _expand_array(self):
-        # To perform a subs at every element of the array.
-        def _array_subs(arr, var, val):
-            arr = MutableDenseNDimArray(arr)
-            for i in range(len(arr)):
-                index = arr._get_tuple_index(i)
-                arr[index] = arr[index].subs(var, val)
-            return arr.tolist()
+        res = []
+        for values in itertools.product(*[range(inf, sup+1)
+                                        for var, inf, sup
+                                        in self._limits]):
+            res.append(self._get_element(values))
 
-        list_gen = self.function
-        for var, inf, sup in reversed(self._limits):
-            list_expr = list_gen
-            list_gen = []
-            for val in range(inf, sup+1):
-                if not isinstance(list_expr, Iterable):
-                    list_gen.append(list_expr.subs(var, val))
-                else:
-                    list_gen.append(_array_subs(list_expr, var, val))
-        return ImmutableDenseNDimArray(list_gen)
+        return ImmutableDenseNDimArray(res, self.shape)
+
+    def _get_element(self, values):
+        temp = self.function
+        for var, val in zip(self.variables, values):
+            temp = temp.subs(var, val)
+        return temp
+
+    def tolist(self):
+        """Transform the expanded array to a list
+
+        Raises
+        ======
+
+        ValueError : When there is a symbolic dimension
+
+        Examples
+        ========
+
+        >>> from sympy.tensor.array import ArrayComprehension
+        >>> from sympy import symbols
+        >>> i, j = symbols('i j')
+        >>> a = ArrayComprehension(10*i + j, (i, 1, 4), (j, 1, 3))
+        >>> a.tolist()
+        [[11, 12, 13], [21, 22, 23], [31, 32, 33], [41, 42, 43]]
+        """
+        if self.is_shape_numeric:
+            return self._expand_array().tolist()
+
+        raise ValueError("A symbolic array cannot be expanded to a list")
+
+    def tomatrix(self):
+        """Transform the expanded array to a matrix
+
+        Raises
+        ======
+
+        ValueError : When there is a symbolic dimension
+        ValueError : When the rank of the expanded array is not equal to 2
+
+        Examples
+        ========
+
+        >>> from sympy.tensor.array import ArrayComprehension
+        >>> from sympy import symbols
+        >>> i, j = symbols('i j')
+        >>> a = ArrayComprehension(10*i + j, (i, 1, 4), (j, 1, 3))
+        >>> a.tomatrix()
+        Matrix([
+        [11, 12, 13],
+        [21, 22, 23],
+        [31, 32, 33],
+        [41, 42, 43]])
+        """
+        from sympy.matrices import Matrix
+
+        if not self.is_shape_numeric:
+            raise ValueError("A symbolic array cannot be expanded to a matrix")
+        if self._rank != 2:
+            raise ValueError('Dimensions must be of size of 2')
+
+        return Matrix(self._expand_array().tomatrix())
+
+
+def isLambda(v):
+    LAMBDA = lambda: 0
+    return isinstance(v, type(LAMBDA)) and v.__name__ == LAMBDA.__name__
+
+class ArrayComprehensionMap(ArrayComprehension):
+    '''
+    A subclass of ArrayComprehension dedicated to map external function lambda.
+
+    Notes
+    =====
+
+    Only the lambda function is considered.
+    At most one argument in lambda function is accepted in order to avoid ambiguity
+    in value assignment.
+
+    Examples
+    ========
+
+    >>> from sympy.tensor.array import ArrayComprehensionMap
+    >>> from sympy import symbols
+    >>> i, j, k = symbols('i j k')
+    >>> a = ArrayComprehensionMap(lambda: 1, (i, 1, 4))
+    >>> a.doit()
+    [1, 1, 1, 1]
+    >>> b = ArrayComprehensionMap(lambda a: a+1, (j, 1, 4))
+    >>> b.doit()
+    [2, 3, 4, 5]
+
+    '''
+    def __new__(cls, function, *symbols, **assumptions):
+        if any(len(l) != 3 or None for l in symbols):
+            raise ValueError('ArrayComprehension requires values lower and upper bound'
+                              ' for the expression')
+
+        if not isLambda(function):
+            raise ValueError('Data type not supported')
+
+        arglist = cls._check_limits_validity(function, symbols)
+        obj = Basic.__new__(cls, *arglist, **assumptions)
+        obj._limits = obj._args
+        obj._shape = cls._calculate_shape_from_limits(obj._limits)
+        obj._rank = len(obj._shape)
+        obj._loop_size = cls._calculate_loop_size(obj._shape)
+        obj._lambda = function
+        return obj
+
+    @property
+    def func(self):
+        class _(ArrayComprehensionMap):
+            def __new__(cls, *args, **kwargs):
+                return ArrayComprehensionMap(self._lambda, *args, **kwargs)
+        return _
+
+    def _get_element(self, values):
+        temp = self._lambda
+        if self._lambda.__code__.co_argcount == 0:
+            temp = temp()
+        elif self._lambda.__code__.co_argcount == 1:
+            temp = temp(functools.reduce(lambda a, b: a*b, values))
+        return temp
